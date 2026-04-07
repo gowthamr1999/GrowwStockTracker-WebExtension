@@ -6,6 +6,7 @@
   let totalStocksEl;
   let refreshBtn;
   let clearAllBtn;
+  let extensionVersionEl;
 
   document.addEventListener('DOMContentLoaded', init);
 
@@ -14,10 +15,15 @@
     totalStocksEl = document.getElementById('total-stocks');
     refreshBtn = document.getElementById('refresh-btn');
     clearAllBtn = document.getElementById('clear-all-btn');
+    extensionVersionEl = document.getElementById('extension-version');
 
     if (!stocksContainer || !totalStocksEl || !refreshBtn || !clearAllBtn) {
       console.error('Popup UI elements not found.');
       return;
+    }
+
+    if (extensionVersionEl) {
+      extensionVersionEl.textContent = `v${chrome.runtime.getManifest().version}`;
     }
 
     refreshBtn.addEventListener('click', refreshPrices);
