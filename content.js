@@ -2,6 +2,9 @@
 (function() {
   'use strict';
 
+  const extensionVersion = chrome.runtime.getManifest().version;
+  console.log(`[Groww Stock Tracker] Content script active - v${extensionVersion}`);
+
   // Function to extract stock data from the current page
   function extractStockData() {
     // Try to find stock name and price on Groww's stock detail page

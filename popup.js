@@ -22,9 +22,13 @@
       return;
     }
 
+    const extensionVersion = chrome.runtime.getManifest().version;
+
     if (extensionVersionEl) {
-      extensionVersionEl.textContent = `v${chrome.runtime.getManifest().version}`;
+      extensionVersionEl.textContent = `v${extensionVersion}`;
     }
+
+    console.log(`[Groww Stock Tracker] Popup loaded - v${extensionVersion}`);
 
     refreshBtn.addEventListener('click', refreshPrices);
     clearAllBtn.addEventListener('click', clearAll);
