@@ -325,6 +325,11 @@ button {
   animation: slideIn 0.3s ease;
 }
 
+.stock-card.current-page {
+  border-color: var(--accent-light);
+  box-shadow: 0 0 0 1px rgba(124, 143, 240, 0.22), 0 8px 24px rgba(102, 126, 234, 0.12);
+}
+
 @keyframes slideIn {
   from {
     opacity: 0;
@@ -346,6 +351,19 @@ button {
   justify-content: space-between;
   align-items: flex-start;
   margin-bottom: 14px;
+}
+
+.current-page-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(102, 126, 234, 0.12);
+  color: var(--accent-light);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .stock-info {

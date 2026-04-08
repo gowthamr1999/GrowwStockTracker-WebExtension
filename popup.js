@@ -14,6 +14,7 @@
   let extensionVersionEl;
   let statusMessageEl;
   let autoRefreshTimer = null;
+  let currentTabStockKey = '';
 
   const AUTO_REFRESH_MS = 10000;
 
@@ -54,7 +55,7 @@
     autoRefreshToggleEl.addEventListener('change', handleAutoRefreshToggle);
 
     loadAutoRefreshPreference();
-    loadStocks();
+    updateCurrentTabStockKey().then(() => loadStocks());
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
       if (namespace === 'local' && changes.trackedStocks) {
@@ -233,6 +234,21 @@
     return Number.isFinite(firstPrice)
       && Number.isFinite(secondPrice)
       && Math.abs(firstPrice - secondPrice) < 0.05;
+  }
+
+  function getStockKeyFromUrl(url) {
+    const match = String(url || '').match(/\/stocks\/([^\/]+)/);
+    return match ? match[1] : '';
+  }
+
+  async function updateCurrentTabStockKey() {
+    try {
+      const [tab] = await tabsQuery({ active: true, currentWindow: true });
+      currentTabStockKey = tab && tab.url ? getStockKeyFromUrl(tab.url) : '';
+    } catch (error) {
+      console.error('Failed to read current tab:', error);
+      currentTabStockKey = '';
+    }
   }
 
   function getBuySignal(data) {
@@ -514,7 +530,19 @@
 
       showStatus('', '');
 
-      const sortedStocks = Object.entries(stocks).sort((a, b) => b[1].timestamp - a[1].timestamp);
+      const sortedStocks = Object.entries(stocks).sort((a, b) => {
+        const aIsCurrent = a[0] === currentTabStockKey || (a[1].url && a[1].url.includes(currentTabStockKey));
+        const bIsCurrent = b[0] === currentTabStockKey || (b[1].url && b[1].url.includes(currentTabStockKey));
+
+        if (aIsCurrent && !bIsCurrent) {
+          return -1;
+        }
+        if (!aIsCurrent && bIsCurrent) {
+          return 1;
+        }
+
+        return b[1].timestamp - a[1].timestamp;
+      });
 
       stocksContainer.innerHTML = sortedStocks.map(([symbol, data]) => createStockCard(symbol, data)).join('');
 
@@ -569,6 +597,7 @@
 
     const targetPrice = toNumber(data.targetPrice, NaN);
     const buySignal = getBuySignal(data);
+    const isCurrentPageStock = symbol === currentTabStockKey || (data.url && data.url.includes(currentTabStockKey));
     const safeName = escapeHtml(data.name || symbol);
     const safeSymbol = escapeHtml(symbol);
     const safeUrl = data.url && data.url !== '#'
@@ -576,11 +605,12 @@
       : '';
 
     return `
-      <div class="stock-card">
+      <div class="stock-card ${isCurrentPageStock ? 'current-page' : ''}">
         <div class="stock-header">
           <div class="stock-info">
             <div class="stock-name">${safeName}</div>
             <div class="stock-symbol">${safeSymbol}</div>
+            ${isCurrentPageStock ? '<div class="current-page-badge">Current Page</div>' : ''}
           </div>
           <button class="delete-btn" data-symbol="${safeSymbol}" type="button" aria-label="Delete ${safeName}">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
