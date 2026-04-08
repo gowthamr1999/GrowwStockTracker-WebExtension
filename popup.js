@@ -111,14 +111,14 @@
     });
   }
 
-  function executeScript(tabId, files) {
+  function executeScript(tabId, injection) {
     return new Promise((resolve, reject) => {
-      chrome.scripting.executeScript({ target: { tabId }, files }, () => {
+      chrome.scripting.executeScript({ target: { tabId }, ...injection }, (results) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-        resolve();
+        resolve(results || []);
       });
     });
   }
@@ -126,14 +126,98 @@
   async function ensureContentScriptReady(tabId) {
     try {
       await sendMessageToTab(tabId, { type: 'PING_TRACKER' });
-      return;
+      return true;
     } catch (error) {
-      if (!/Receiving end does not exist/i.test(error.message)) {
-        throw error;
+      if (/Receiving end does not exist/i.test(error.message)) {
+        return false;
       }
+      throw error;
     }
+  }
 
-    await executeScript(tabId, ['content.js']);
+  async function extractStockDataFromTab(tabId) {
+    const results = await executeScript(tabId, {
+      func: () => {
+        const parsePriceFromText = (text) => {
+          if (!text) {
+            return NaN;
+          }
+
+          const match = String(text).match(/₹\s*([\d,]+(?:\.\d+)?)/);
+          return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
+        };
+
+        const stockNameElement = document.querySelector('[data-auto="stock-name"]') ||
+          document.querySelector('h1.contentPrimary') ||
+          document.querySelector('.stockName') ||
+          document.querySelector('h1');
+
+        const priceSelectors = [
+          '.displaySmall.contentPrimary.tickerUi_livePrice__BPbPc',
+          '[class*="tickerUi_livePrice"]',
+          '[data-auto="current-price"]',
+          '[data-testid="instrument-price-lastprice"]',
+          '[data-testid="ltp"]',
+          '.cur86v0',
+          '.ltp'
+        ];
+
+        const priceElement = priceSelectors
+          .map((selector) => document.querySelector(selector))
+          .find(Boolean);
+
+        const stockName = stockNameElement
+          ? stockNameElement.textContent.trim()
+          : document.title.replace(/\s*[|\-].*$/, '').trim();
+
+        const priceText = priceElement ? priceElement.textContent.trim() : '';
+        let price = parsePriceFromText(priceText);
+
+        if (!Number.isFinite(price) && stockNameElement) {
+          const headerSection = stockNameElement.closest('section, main, div');
+          price = parsePriceFromText(headerSection ? headerSection.innerText : '');
+        }
+
+        if (!Number.isFinite(price) && document.body) {
+          price = parsePriceFromText(document.body.innerText);
+        }
+
+        const urlMatch = window.location.pathname.match(/\/stocks\/([^\/]+)/);
+        const symbol = urlMatch ? urlMatch[1] : stockName;
+
+        if (!stockName || !Number.isFinite(price)) {
+          return null;
+        }
+
+        return {
+          symbol,
+          name: stockName,
+          price,
+          url: window.location.href,
+          timestamp: Date.now()
+        };
+      }
+    });
+
+    return results[0] ? results[0].result : null;
+  }
+
+  async function upsertTrackedStock(data) {
+    const result = await storageGet(['trackedStocks']);
+    const stocks = normaliseStocks(result.trackedStocks);
+    const previous = stocks[data.symbol] || {};
+
+    stocks[data.symbol] = {
+      ...previous,
+      ...data,
+      price: data.price,
+      lastSeenPrice: Number.isFinite(previous.currentPrice) ? previous.currentPrice : data.price,
+      currentPrice: data.price,
+      timestamp: Date.now()
+    };
+
+    await storageSet({ trackedStocks: stocks });
+    return stocks[data.symbol];
   }
 
   function showStatus(message, type) {
@@ -275,6 +359,82 @@
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  function parsePriceFromText(text) {
+    if (!text) {
+      return NaN;
+    }
+
+    const match = String(text).match(/₹\s*([\d,]+(?:\.\d+)?)/);
+    return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
+  }
+
+  function extractStockDataFromDocument(doc, url) {
+    if (!doc) {
+      return null;
+    }
+
+    const stockNameElement = doc.querySelector('[data-auto="stock-name"]') ||
+      doc.querySelector('h1.contentPrimary') ||
+      doc.querySelector('.stockName') ||
+      doc.querySelector('h1');
+
+    const priceSelectors = [
+      '.displaySmall.contentPrimary.tickerUi_livePrice__BPbPc',
+      '[class*="tickerUi_livePrice"]',
+      '[data-auto="current-price"]',
+      '[data-testid="instrument-price-lastprice"]',
+      '[data-testid="ltp"]',
+      '.cur86v0',
+      '.ltp'
+    ];
+
+    const priceElement = priceSelectors
+      .map((selector) => doc.querySelector(selector))
+      .find(Boolean);
+
+    const stockName = stockNameElement
+      ? stockNameElement.textContent.trim()
+      : doc.title.replace(/\s*[|\-].*$/, '').trim();
+
+    const priceText = priceElement ? priceElement.textContent.trim() : '';
+    let price = parsePriceFromText(priceText);
+
+    if (!Number.isFinite(price) && stockNameElement) {
+      const headerSection = stockNameElement.closest('section, main, div');
+      price = parsePriceFromText(headerSection ? headerSection.innerText : '');
+    }
+
+    if (!Number.isFinite(price) && doc.body) {
+      price = parsePriceFromText(doc.body.innerText);
+    }
+
+    const urlMatch = String(url || '').match(/\/stocks\/([^\/]+)/);
+    const symbol = urlMatch ? urlMatch[1] : stockName;
+
+    if (!stockName || !Number.isFinite(price)) {
+      return null;
+    }
+
+    return {
+      symbol,
+      name: stockName,
+      price,
+      url,
+      timestamp: Date.now()
+    };
+  }
+
+  async function fetchStockDataFromUrl(url) {
+    const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch stock page (${response.status})`);
+    }
+
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return extractStockDataFromDocument(doc, url);
   }
 
   function toNumber(value, fallback) {
@@ -569,21 +729,30 @@
         return;
       }
 
-      await ensureContentScriptReady(tab.id);
+      const hasContentScript = await ensureContentScriptReady(tab.id);
+      let trackedData = null;
 
-      const response = await sendMessageToTab(tab.id, { type: 'TRACK_CURRENT_STOCK' });
-      if (!response || !response.ok) {
-        await saveManualStockFromTab(
-          tab,
-          response && response.error
-            ? `${response.error} Auto-detect did not work on this page yet.`
-            : 'Could not auto-read the stock details from this page.'
-        );
+      if (hasContentScript) {
+        const response = await sendMessageToTab(tab.id, { type: 'TRACK_CURRENT_STOCK' });
+        if (response && response.ok && response.data) {
+          trackedData = response.data;
+        }
+      }
+
+      if (!trackedData) {
+        const extractedData = await extractStockDataFromTab(tab.id);
+        if (extractedData && Number.isFinite(toNumber(extractedData.price, NaN))) {
+          trackedData = await upsertTrackedStock(extractedData);
+        }
+      }
+
+      if (!trackedData) {
+        await saveManualStockFromTab(tab, 'Could not auto-read the stock details from this page.');
         return;
       }
 
-      const trackedPrice = toNumber(response.data.price, 0).toFixed(2);
-      showStatus(`Tracked ${response.data.name} at ₹${trackedPrice}.`, 'success');
+      const trackedPrice = toNumber(trackedData.price, 0).toFixed(2);
+      showStatus(`Tracked ${trackedData.name} at ₹${trackedPrice}.`, 'success');
       await loadStocks();
     } catch (error) {
       console.error('Failed to track current page:', error);
@@ -655,36 +824,70 @@
       `;
   }
 
-  // Refresh current prices with simulated movement
+  // Refresh current prices by reading actual Groww page values
   async function refreshPrices(isAutoRefresh) {
     try {
       const result = await storageGet(['trackedStocks']);
       const stocks = normaliseStocks(result.trackedStocks);
+      const trackedEntries = Object.entries(stocks);
 
-      if (Object.keys(stocks).length === 0) {
+      if (trackedEntries.length === 0) {
         return;
       }
 
       if (!isAutoRefresh) {
-        showStatus('Refreshing saved comparisons...', 'info');
+        showStatus('Refreshing all tracked prices from Groww...', 'info');
       }
       setRefreshButtonLoading(true, false);
 
-      Object.values(stocks).forEach((data) => {
-        const basePrice = toNumber(data.currentPrice, toNumber(data.lastSeenPrice, toNumber(data.price, 0)));
-        data.lastSeenPrice = basePrice;
-        const change = (Math.random() - 0.5) * 0.02 * basePrice;
-        data.currentPrice = basePrice + change;
-      });
+      const [activeTab] = await tabsQuery({ active: true, currentWindow: true });
+      let activeTabData = null;
+
+      if (activeTab && activeTab.id && activeTab.url && activeTab.url.includes('groww.in/stocks/')) {
+        try {
+          activeTabData = await extractStockDataFromTab(activeTab.id);
+        } catch (error) {
+          console.warn('Could not read stock data from active tab:', error);
+        }
+      }
+
+      let updatedCount = 0;
+
+      for (const [symbol, data] of trackedEntries) {
+        try {
+          let freshData = null;
+
+          if (activeTabData && (activeTabData.symbol === symbol || activeTabData.url === data.url)) {
+            freshData = activeTabData;
+          } else if (data.url && data.url.includes('groww.in/stocks/')) {
+            freshData = await fetchStockDataFromUrl(data.url);
+          }
+
+          if (!freshData || !Number.isFinite(toNumber(freshData.price, NaN))) {
+            continue;
+          }
+
+          const previousLive = toNumber(data.currentPrice, toNumber(data.lastSeenPrice, toNumber(data.price, 0)));
+          data.lastSeenPrice = previousLive;
+          data.currentPrice = toNumber(freshData.price, previousLive);
+          data.name = freshData.name || data.name;
+          data.url = freshData.url || data.url;
+          updatedCount += 1;
+        } catch (error) {
+          console.warn(`Failed to refresh ${symbol}:`, error);
+        }
+      }
 
       await storageSet({ trackedStocks: stocks });
-      loadStocks();
+      await loadStocks();
 
       showStatus(
-        isAutoRefresh
-          ? 'Auto refresh updated all tracked prices.'
-          : 'Refresh all updated the live prices and stored the previous values as last seen.',
-        isAutoRefresh ? 'info' : 'success'
+        updatedCount > 0
+          ? isAutoRefresh
+            ? `Auto refresh updated ${updatedCount} tracked stock${updatedCount !== 1 ? 's' : ''}.`
+            : `Refresh all updated ${updatedCount} tracked stock${updatedCount !== 1 ? 's' : ''} and stored the previous values as last seen.`
+          : 'Could not refresh prices from Groww right now.',
+        updatedCount > 0 ? (isAutoRefresh ? 'info' : 'success') : 'error'
       );
       window.setTimeout(() => {
         setRefreshButtonLoading(false, false);

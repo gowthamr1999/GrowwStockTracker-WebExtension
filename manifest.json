@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Groww Stock Tracker",
-  "version": "1.4.2",
+  "version": "1.4.4",
   "description": "Track and compare stock prices on Groww",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["*://groww.in/*"],

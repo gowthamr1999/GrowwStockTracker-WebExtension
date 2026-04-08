@@ -103,6 +103,11 @@
   }
 
   function saveTrackedStock(data, callback) {
+    if (!chrome.storage || !chrome.storage.local) {
+      callback('Storage API unavailable in this tab context.');
+      return;
+    }
+
     chrome.storage.local.get(['trackedStocks'], (result) => {
       const tracked = result.trackedStocks || {};
       const previous = tracked[data.symbol] || {};
