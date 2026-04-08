@@ -111,6 +111,31 @@
     });
   }
 
+  function executeScript(tabId, files) {
+    return new Promise((resolve, reject) => {
+      chrome.scripting.executeScript({ target: { tabId }, files }, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  async function ensureContentScriptReady(tabId) {
+    try {
+      await sendMessageToTab(tabId, { type: 'PING_TRACKER' });
+      return;
+    } catch (error) {
+      if (!/Receiving end does not exist/i.test(error.message)) {
+        throw error;
+      }
+    }
+
+    await executeScript(tabId, ['content.js']);
+  }
+
   function showStatus(message, type) {
     if (!statusMessageEl) {
       return;
@@ -544,6 +569,8 @@
         return;
       }
 
+      await ensureContentScriptReady(tab.id);
+
       const response = await sendMessageToTab(tab.id, { type: 'TRACK_CURRENT_STOCK' });
       if (!response || !response.ok) {
         await saveManualStockFromTab(
@@ -562,7 +589,12 @@
       console.error('Failed to track current page:', error);
       const [tab] = await tabsQuery({ active: true, currentWindow: true });
       if (tab && tab.url && tab.url.includes('groww.in/stocks/')) {
-        await saveManualStockFromTab(tab, 'The page did not respond, so manual save is available instead.');
+        await saveManualStockFromTab(
+          tab,
+          /Cannot access contents of the page/i.test(error.message)
+            ? 'Chrome blocked direct page access here, so manual save is available instead.'
+            : 'The page was not ready, so manual save is available instead.'
+        );
         return;
       }
       showStatus('Unable to talk to the page. Reload the Groww tab once and try again.', 'error');

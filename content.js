@@ -25,15 +25,23 @@
       document.querySelector('.stockName') ||
       document.querySelector('h1');
 
-    const priceElement = document.querySelector('[data-auto="current-price"]') ||
-      document.querySelector('[data-testid="instrument-price-lastprice"]') ||
-      document.querySelector('[data-testid="ltp"]') ||
-      document.querySelector('.cur86v0') ||
-      document.querySelector('.ltp') ||
-      document.querySelector('[class*="price"]');
+    const priceSelectors = [
+      '.displaySmall.contentPrimary.tickerUi_livePrice__BPbPc',
+      '[class*="tickerUi_livePrice"]',
+      '[data-auto="current-price"]',
+      '[data-testid="instrument-price-lastprice"]',
+      '[data-testid="ltp"]',
+      '.cur86v0',
+      '.ltp'
+    ];
+
+    const priceElement = priceSelectors
+      .map((selector) => document.querySelector(selector))
+      .find(Boolean);
 
     const changeElement = document.querySelector('[data-auto="stock-change"]') ||
       document.querySelector('[data-testid="instrument-price-change"]') ||
+      document.querySelector('[class*="tickerUi_priceChange"]') ||
       document.querySelector('.change');
 
     const stockName = stockNameElement
@@ -48,12 +56,13 @@
     const priceText = priceElement ? priceElement.textContent.trim() : '';
     let price = parsePriceFromText(priceText);
 
-    if (!Number.isFinite(price)) {
-      price = parsePriceFromText(nearbyText);
+    if (!Number.isFinite(price) && stockNameElement) {
+      const headerSection = stockNameElement.closest('section, main, div');
+      price = parsePriceFromText(headerSection ? headerSection.innerText : '');
     }
 
     if (!Number.isFinite(price)) {
-      price = parsePriceFromText(pageText);
+      price = parsePriceFromText(nearbyText);
     }
 
     let changePercent = null;
@@ -71,10 +80,17 @@
     if (!stockName || !Number.isFinite(price)) {
       console.warn('[Groww Stock Tracker] Could not extract stock details from page.', {
         stockName,
-        priceText
+        priceText,
+        selectorMatched: priceElement ? priceElement.className || priceElement.tagName : 'none'
       });
       return null;
     }
+
+    console.log('[Groww Stock Tracker] Extracted stock data', {
+      stockName,
+      price,
+      selectorMatched: priceElement ? priceElement.className || priceElement.tagName : 'fallback'
+    });
 
     return {
       symbol,
@@ -113,7 +129,16 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!message || message.type !== 'TRACK_CURRENT_STOCK') {
+    if (!message) {
+      return;
+    }
+
+    if (message.type === 'PING_TRACKER') {
+      sendResponse({ ok: true, version: extensionVersion });
+      return;
+    }
+
+    if (message.type !== 'TRACK_CURRENT_STOCK') {
       return;
     }
 
