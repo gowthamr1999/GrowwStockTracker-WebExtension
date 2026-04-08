@@ -129,18 +129,19 @@
   function getBuySignal(data) {
     const targetPrice = toNumber(data.targetPrice, NaN);
     const savedPrice = toNumber(data.price, NaN);
-    const currentPrice = toNumber(data.currentPrice, savedPrice);
+    const lastSeenPrice = toNumber(data.lastSeenPrice, savedPrice);
+    const currentPrice = toNumber(data.currentPrice, lastSeenPrice);
 
     if (!Number.isFinite(targetPrice)) {
       return { isBuy: false, reason: '' };
     }
 
     if (pricesMatch(targetPrice, currentPrice)) {
-      return { isBuy: true, reason: 'Current price matched your target price.' };
+      return { isBuy: true, reason: 'Live price matched your set price.' };
     }
 
-    if (pricesMatch(targetPrice, savedPrice)) {
-      return { isBuy: true, reason: 'Saved price matched your target price.' };
+    if (pricesMatch(targetPrice, lastSeenPrice)) {
+      return { isBuy: true, reason: 'Last seen price matched your set price.' };
     }
 
     return { isBuy: false, reason: '' };
@@ -229,6 +230,7 @@
       symbol: slug,
       name: defaultName,
       price: manualPrice,
+      lastSeenPrice: manualPrice,
       currentPrice: manualPrice,
       url: tab.url,
       timestamp: Date.now(),
@@ -289,7 +291,8 @@
         .filter(([, data]) => data && typeof data === 'object')
         .map(([symbol, data]) => {
           const savedPrice = toNumber(data.price, 0);
-          const currentPrice = toNumber(data.currentPrice, savedPrice);
+          const lastSeenPrice = toNumber(data.lastSeenPrice, savedPrice);
+          const currentPrice = toNumber(data.currentPrice, lastSeenPrice);
           const targetPrice = toNumber(data.targetPrice, NaN);
 
           return [symbol, {
@@ -299,6 +302,7 @@
             url: data.url || '#',
             timestamp: Number(data.timestamp) || Date.now(),
             price: savedPrice,
+            lastSeenPrice,
             currentPrice,
             targetPrice: Number.isFinite(targetPrice) ? targetPrice : null
           }];
@@ -363,9 +367,10 @@
   // Create HTML for a stock card
   function createStockCard(symbol, data) {
     const savedPrice = toNumber(data.price, 0);
-    const currentPrice = toNumber(data.currentPrice, savedPrice);
-    const priceDiff = currentPrice - savedPrice;
-    const percentChange = savedPrice ? ((priceDiff / savedPrice) * 100) : 0;
+    const lastSeenPrice = toNumber(data.lastSeenPrice, savedPrice);
+    const currentPrice = toNumber(data.currentPrice, lastSeenPrice);
+    const priceDiff = currentPrice - lastSeenPrice;
+    const percentChange = lastSeenPrice ? ((priceDiff / lastSeenPrice) * 100) : 0;
 
     let changeClass = 'neutral';
     let changeArrow = '━';
@@ -402,11 +407,15 @@
 
         <div class="price-grid">
           <div class="price-box">
-            <div class="price-label">Saved Price</div>
-            <div class="price-value">${savedPrice.toFixed(2)}</div>
+            <div class="price-label">Set Price</div>
+            <div class="price-value">${Number.isFinite(targetPrice) ? targetPrice.toFixed(2) : '--'}</div>
           </div>
           <div class="price-box">
-            <div class="price-label">Current Price</div>
+            <div class="price-label">Last Seen</div>
+            <div class="price-value">${lastSeenPrice.toFixed(2)}</div>
+          </div>
+          <div class="price-box">
+            <div class="price-label">Live Price</div>
             <div class="price-value">${currentPrice.toFixed(2)}</div>
           </div>
         </div>
@@ -432,8 +441,8 @@
           </div>
           <div class="target-note">
             ${Number.isFinite(targetPrice)
-              ? `Target Price: ₹${targetPrice.toFixed(2)}`
-              : 'Set a buy price and the popup will tell you when it matches.'}
+              ? `Set Price: ₹${targetPrice.toFixed(2)} · Last Seen: ₹${lastSeenPrice.toFixed(2)} · Live: ₹${currentPrice.toFixed(2)}`
+              : 'Set a buy price and the popup will tell you when it matches the last seen or live price.'}
           </div>
           ${buySignal.isBuy ? `<div class="buy-signal">Buy Signal: ${escapeHtml(buySignal.reason)}</div>` : ''}
         </div>
@@ -610,7 +619,7 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
         </svg>
-        Refresh Prices
+        Refresh All Prices
       `;
   }
 
@@ -630,7 +639,8 @@
       setRefreshButtonLoading(true, false);
 
       Object.values(stocks).forEach((data) => {
-        const basePrice = toNumber(data.currentPrice, toNumber(data.price, 0));
+        const basePrice = toNumber(data.currentPrice, toNumber(data.lastSeenPrice, toNumber(data.price, 0)));
+        data.lastSeenPrice = basePrice;
         const change = (Math.random() - 0.5) * 0.02 * basePrice;
         data.currentPrice = basePrice + change;
       });
@@ -640,8 +650,8 @@
 
       showStatus(
         isAutoRefresh
-          ? 'Auto refresh updated your saved comparison values.'
-          : 'Updated the saved comparison values.',
+          ? 'Auto refresh updated all tracked prices.'
+          : 'Refresh all updated the live prices and stored the previous values as last seen.',
         isAutoRefresh ? 'info' : 'success'
       );
       window.setTimeout(() => {

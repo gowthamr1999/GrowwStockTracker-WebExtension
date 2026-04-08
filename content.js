@@ -89,7 +89,16 @@
   function saveTrackedStock(data, callback) {
     chrome.storage.local.get(['trackedStocks'], (result) => {
       const tracked = result.trackedStocks || {};
-      tracked[data.symbol] = data;
+      const previous = tracked[data.symbol] || {};
+
+      tracked[data.symbol] = {
+        ...previous,
+        ...data,
+        price: data.price,
+        lastSeenPrice: Number.isFinite(previous.currentPrice) ? previous.currentPrice : data.price,
+        currentPrice: data.price,
+        timestamp: Date.now()
+      };
 
       chrome.storage.local.set({ trackedStocks: tracked }, () => {
         if (chrome.runtime.lastError) {
