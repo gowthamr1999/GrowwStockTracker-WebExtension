@@ -103,10 +103,11 @@ h1 {
 
 /* Controls */
 .controls {
-  padding: 16px 20px;
+  padding: 16px 20px 10px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -120,11 +121,23 @@ button {
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
 }
 
+.btn-primary {
+  flex: 1 1 100%;
+  padding: 11px 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
 .btn-secondary {
-  flex: 1;
+  flex: 1 1 160px;
   padding: 10px 14px;
   background: var(--bg-card);
   color: var(--text-primary);
@@ -137,6 +150,7 @@ button {
 }
 
 .btn-danger {
+  flex: 0 0 auto;
   padding: 10px 16px;
   background: rgba(239, 68, 68, 0.1);
   color: var(--red);
@@ -145,6 +159,104 @@ button {
 
 .btn-danger:hover {
   background: rgba(239, 68, 68, 0.2);
+}
+
+.backup-actions {
+  display: flex;
+  gap: 10px;
+  padding: 0 20px 12px;
+  background: var(--bg-secondary);
+}
+
+.btn-small {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+
+.auto-refresh-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 20px 12px;
+  background: var(--bg-secondary);
+}
+
+.auto-refresh-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.auto-refresh-copy strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  width: 46px;
+  height: 26px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: 0.2s ease;
+  border-radius: 999px;
+}
+
+.slider::before {
+  content: '';
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  top: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: 0.2s ease;
+}
+
+.switch input:checked + .slider {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(20px);
+}
+
+.status-message {
+  min-height: 20px;
+  padding: 0 20px 12px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.status-message.success {
+  color: var(--green);
+}
+
+.status-message.error {
+  color: var(--red);
+}
+
+.status-message.info {
+  color: var(--accent-light);
 }
 
 /* Stocks Container */
@@ -329,6 +441,57 @@ button {
 .change-display.neutral {
   background: var(--bg-secondary);
   color: var(--text-muted);
+}
+
+.target-section {
+  margin-top: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.target-row {
+  display: flex;
+  gap: 8px;
+}
+
+.target-price-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #10162f;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.target-price-input:focus {
+  border-color: var(--accent);
+}
+
+.save-target-btn {
+  padding: 9px 12px;
+  background: rgba(102, 126, 234, 0.14);
+  color: var(--accent-light);
+  border: 1px solid rgba(102, 126, 234, 0.22);
+}
+
+.target-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.buy-signal {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .change-arrow {

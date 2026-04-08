@@ -4,20 +4,35 @@
 
   let stocksContainer;
   let totalStocksEl;
+  let trackCurrentBtn;
   let refreshBtn;
   let clearAllBtn;
+  let exportBtn;
+  let importBtn;
+  let importFileInput;
+  let autoRefreshToggleEl;
   let extensionVersionEl;
+  let statusMessageEl;
+  let autoRefreshTimer = null;
+
+  const AUTO_REFRESH_MS = 10000;
 
   document.addEventListener('DOMContentLoaded', init);
 
   function init() {
     stocksContainer = document.getElementById('stocks-container');
     totalStocksEl = document.getElementById('total-stocks');
+    trackCurrentBtn = document.getElementById('track-current-btn');
     refreshBtn = document.getElementById('refresh-btn');
     clearAllBtn = document.getElementById('clear-all-btn');
+    exportBtn = document.getElementById('export-btn');
+    importBtn = document.getElementById('import-btn');
+    importFileInput = document.getElementById('import-file-input');
+    autoRefreshToggleEl = document.getElementById('auto-refresh-toggle');
     extensionVersionEl = document.getElementById('extension-version');
+    statusMessageEl = document.getElementById('status-message');
 
-    if (!stocksContainer || !totalStocksEl || !refreshBtn || !clearAllBtn) {
+    if (!stocksContainer || !totalStocksEl || !trackCurrentBtn || !refreshBtn || !clearAllBtn || !exportBtn || !importBtn || !importFileInput || !autoRefreshToggleEl) {
       console.error('Popup UI elements not found.');
       return;
     }
@@ -30,9 +45,15 @@
 
     console.log(`[Groww Stock Tracker] Popup loaded - v${extensionVersion}`);
 
+    trackCurrentBtn.addEventListener('click', trackCurrentPage);
     refreshBtn.addEventListener('click', refreshPrices);
     clearAllBtn.addEventListener('click', clearAll);
+    exportBtn.addEventListener('click', exportBackup);
+    importBtn.addEventListener('click', () => importFileInput.click());
+    importFileInput.addEventListener('change', importBackup);
+    autoRefreshToggleEl.addEventListener('change', handleAutoRefreshToggle);
 
+    loadAutoRefreshPreference();
     loadStocks();
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
@@ -64,6 +85,169 @@
         resolve();
       });
     });
+  }
+
+  function tabsQuery(queryInfo) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query(queryInfo, (tabs) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(tabs || []);
+      });
+    });
+  }
+
+  function sendMessageToTab(tabId, message) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(response);
+      });
+    });
+  }
+
+  function showStatus(message, type) {
+    if (!statusMessageEl) {
+      return;
+    }
+
+    statusMessageEl.textContent = message || '';
+    statusMessageEl.className = `status-message${type ? ` ${type}` : ''}`;
+  }
+
+  function pricesMatch(firstPrice, secondPrice) {
+    return Number.isFinite(firstPrice)
+      && Number.isFinite(secondPrice)
+      && Math.abs(firstPrice - secondPrice) < 0.05;
+  }
+
+  function getBuySignal(data) {
+    const targetPrice = toNumber(data.targetPrice, NaN);
+    const savedPrice = toNumber(data.price, NaN);
+    const currentPrice = toNumber(data.currentPrice, savedPrice);
+
+    if (!Number.isFinite(targetPrice)) {
+      return { isBuy: false, reason: '' };
+    }
+
+    if (pricesMatch(targetPrice, currentPrice)) {
+      return { isBuy: true, reason: 'Current price matched your target price.' };
+    }
+
+    if (pricesMatch(targetPrice, savedPrice)) {
+      return { isBuy: true, reason: 'Saved price matched your target price.' };
+    }
+
+    return { isBuy: false, reason: '' };
+  }
+
+  async function loadAutoRefreshPreference() {
+    try {
+      const result = await storageGet(['trackerSettings']);
+      const enabled = !!(result.trackerSettings && result.trackerSettings.autoRefresh);
+      autoRefreshToggleEl.checked = enabled;
+      applyAutoRefresh(enabled);
+    } catch (error) {
+      console.error('Failed to load auto refresh preference:', error);
+    }
+  }
+
+  function applyAutoRefresh(enabled) {
+    if (autoRefreshTimer) {
+      window.clearInterval(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+
+    if (enabled) {
+      autoRefreshTimer = window.setInterval(() => {
+        refreshPrices(true);
+      }, AUTO_REFRESH_MS);
+    }
+  }
+
+  async function handleAutoRefreshToggle() {
+    const enabled = !!autoRefreshToggleEl.checked;
+    applyAutoRefresh(enabled);
+
+    try {
+      const result = await storageGet(['trackerSettings']);
+      const settings = result.trackerSettings || {};
+      settings.autoRefresh = enabled;
+      await storageSet({ trackerSettings: settings });
+      showStatus(
+        enabled
+          ? 'Auto refresh is on while this popup stays open.'
+          : 'Auto refresh turned off.',
+        'info'
+      );
+
+      if (enabled) {
+        refreshPrices(true);
+      }
+    } catch (error) {
+      console.error('Failed to save auto refresh preference:', error);
+      showStatus('Could not update the auto refresh setting.', 'error');
+    }
+  }
+
+  function prettifySlug(slug) {
+    return String(slug || '')
+      .split('-')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  async function saveManualStockFromTab(tab, reason) {
+    const url = new URL(tab.url);
+    const slug = (url.pathname.match(/\/stocks\/([^\/]+)/) || [])[1] || 'manual-stock';
+    const defaultName = prettifySlug(slug) || 'Groww Stock';
+    const enteredPrice = window.prompt(
+      `${reason}\n\nEnter the price you see for ${defaultName}:`,
+      ''
+    );
+
+    if (enteredPrice === null) {
+      showStatus('Manual save cancelled.', 'info');
+      return;
+    }
+
+    const manualPrice = toNumber(enteredPrice, NaN);
+    if (!Number.isFinite(manualPrice) || manualPrice <= 0) {
+      showStatus('Please enter a valid price like 679.70', 'error');
+      return;
+    }
+
+    const result = await storageGet(['trackedStocks']);
+    const stocks = normaliseStocks(result.trackedStocks);
+    stocks[slug] = {
+      symbol: slug,
+      name: defaultName,
+      price: manualPrice,
+      currentPrice: manualPrice,
+      url: tab.url,
+      timestamp: Date.now(),
+      manual: true
+    };
+
+    await storageSet({ trackedStocks: stocks });
+    showStatus(`Saved ${defaultName} at ₹${manualPrice.toFixed(2)}.`, 'success');
+    await loadStocks();
+  }
+
+  function downloadTextFile(filename, content) {
+    const blob = new Blob([content], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   function toNumber(value, fallback) {
@@ -106,6 +290,7 @@
         .map(([symbol, data]) => {
           const savedPrice = toNumber(data.price, 0);
           const currentPrice = toNumber(data.currentPrice, savedPrice);
+          const targetPrice = toNumber(data.targetPrice, NaN);
 
           return [symbol, {
             ...data,
@@ -114,7 +299,8 @@
             url: data.url || '#',
             timestamp: Number(data.timestamp) || Date.now(),
             price: savedPrice,
-            currentPrice
+            currentPrice,
+            targetPrice: Number.isFinite(targetPrice) ? targetPrice : null
           }];
         })
     );
@@ -132,10 +318,12 @@
       if (stockCount === 0) {
         renderEmptyState({
           title: 'No stocks tracked yet',
-          text: 'Visit a stock page on Groww and click the "Track" button'
+          text: 'Open a Groww stock page and click "Track This Page" to save it for later comparison.'
         });
         return;
       }
+
+      showStatus('', '');
 
       const sortedStocks = Object.entries(stocks).sort((a, b) => b[1].timestamp - a[1].timestamp);
 
@@ -145,6 +333,21 @@
         btn.addEventListener('click', (event) => {
           const symbol = event.currentTarget.dataset.symbol;
           deleteStock(symbol);
+        });
+      });
+
+      document.querySelectorAll('.save-target-btn').forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          const symbol = event.currentTarget.dataset.symbol;
+          saveTargetPrice(symbol);
+        });
+      });
+
+      document.querySelectorAll('.target-price-input').forEach((input) => {
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            saveTargetPrice(event.currentTarget.dataset.symbol);
+          }
         });
       });
     } catch (error) {
@@ -174,6 +377,8 @@
       changeArrow = '↓';
     }
 
+    const targetPrice = toNumber(data.targetPrice, NaN);
+    const buySignal = getBuySignal(data);
     const safeName = escapeHtml(data.name || symbol);
     const safeSymbol = escapeHtml(symbol);
     const safeUrl = data.url && data.url !== '#'
@@ -212,6 +417,27 @@
           <span class="change-percent">${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(2)}%</span>
         </div>
 
+        <div class="target-section">
+          <div class="target-row">
+            <input
+              class="target-price-input"
+              data-symbol="${safeSymbol}"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Set price"
+              value="${Number.isFinite(targetPrice) ? targetPrice.toFixed(2) : ''}"
+            />
+            <button class="save-target-btn" data-symbol="${safeSymbol}" type="button">Set Price</button>
+          </div>
+          <div class="target-note">
+            ${Number.isFinite(targetPrice)
+              ? `Target Price: ₹${targetPrice.toFixed(2)}`
+              : 'Set a buy price and the popup will tell you when it matches.'}
+          </div>
+          ${buySignal.isBuy ? `<div class="buy-signal">Buy Signal: ${escapeHtml(buySignal.reason)}</div>` : ''}
+        </div>
+
         <div class="timestamp">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
@@ -224,6 +450,116 @@
     `;
   }
 
+  async function saveTargetPrice(symbol) {
+    const input = document.querySelector(`.target-price-input[data-symbol="${symbol}"]`);
+    const targetPrice = input ? toNumber(input.value, NaN) : NaN;
+
+    if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
+      showStatus('Enter a valid set price like 679.70', 'error');
+      return;
+    }
+
+    try {
+      const result = await storageGet(['trackedStocks']);
+      const stocks = normaliseStocks(result.trackedStocks);
+
+      if (!stocks[symbol]) {
+        showStatus('That stock could not be found.', 'error');
+        return;
+      }
+
+      stocks[symbol].targetPrice = targetPrice;
+      await storageSet({ trackedStocks: stocks });
+
+      const buySignal = getBuySignal(stocks[symbol]);
+      showStatus(
+        buySignal.isBuy
+          ? `Set price saved at ₹${targetPrice.toFixed(2)}. Buy signal is active now.`
+          : `Set price saved at ₹${targetPrice.toFixed(2)}.`,
+        buySignal.isBuy ? 'success' : 'info'
+      );
+      await loadStocks();
+    } catch (error) {
+      console.error('Failed to save target price:', error);
+      showStatus('Could not save the set price.', 'error');
+    }
+  }
+
+  async function exportBackup() {
+    try {
+      const result = await storageGet(['trackedStocks']);
+      const stocks = normaliseStocks(result.trackedStocks);
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        version: chrome.runtime.getManifest().version,
+        trackedStocks: stocks
+      };
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadTextFile(`groww-stock-tracker-backup-${stamp}.json`, JSON.stringify(payload, null, 2));
+      showStatus(`Backup exported with ${Object.keys(stocks).length} stock${Object.keys(stocks).length !== 1 ? 's' : ''}.`, 'success');
+    } catch (error) {
+      console.error('Failed to export backup:', error);
+      showStatus('Could not export your backup file.', 'error');
+    }
+  }
+
+  async function importBackup(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const content = await file.text();
+      const parsed = JSON.parse(content);
+      const importedStocks = normaliseStocks(parsed.trackedStocks || parsed);
+      await storageSet({ trackedStocks: importedStocks });
+      showStatus(`Backup imported with ${Object.keys(importedStocks).length} stock${Object.keys(importedStocks).length !== 1 ? 's' : ''}.`, 'success');
+      await loadStocks();
+    } catch (error) {
+      console.error('Failed to import backup:', error);
+      showStatus('Invalid backup file. Please choose a JSON export from this extension.', 'error');
+    } finally {
+      importFileInput.value = '';
+    }
+  }
+
+  async function trackCurrentPage() {
+    try {
+      showStatus('Checking this page for stock details...', 'info');
+
+      const [tab] = await tabsQuery({ active: true, currentWindow: true });
+      if (!tab || !tab.id || !tab.url || !tab.url.includes('groww.in/stocks/')) {
+        showStatus('Open a Groww stock page first, then click "Track This Page".', 'error');
+        return;
+      }
+
+      const response = await sendMessageToTab(tab.id, { type: 'TRACK_CURRENT_STOCK' });
+      if (!response || !response.ok) {
+        await saveManualStockFromTab(
+          tab,
+          response && response.error
+            ? `${response.error} Auto-detect did not work on this page yet.`
+            : 'Could not auto-read the stock details from this page.'
+        );
+        return;
+      }
+
+      const trackedPrice = toNumber(response.data.price, 0).toFixed(2);
+      showStatus(`Tracked ${response.data.name} at ₹${trackedPrice}.`, 'success');
+      await loadStocks();
+    } catch (error) {
+      console.error('Failed to track current page:', error);
+      const [tab] = await tabsQuery({ active: true, currentWindow: true });
+      if (tab && tab.url && tab.url.includes('groww.in/stocks/')) {
+        await saveManualStockFromTab(tab, 'The page did not respond, so manual save is available instead.');
+        return;
+      }
+      showStatus('Unable to talk to the page. Reload the Groww tab once and try again.', 'error');
+    }
+  }
+
   // Delete a stock from tracking
   async function deleteStock(symbol) {
     try {
@@ -231,9 +567,11 @@
       const stocks = normaliseStocks(result.trackedStocks);
       delete stocks[symbol];
       await storageSet({ trackedStocks: stocks });
+      showStatus(`Removed ${symbol} from your tracked list.`, 'info');
       loadStocks();
     } catch (error) {
       console.error('Failed to delete stock:', error);
+      showStatus('Could not remove that stock right now.', 'error');
     }
   }
 
@@ -245,9 +583,11 @@
 
     try {
       await storageSet({ trackedStocks: {} });
+      showStatus('Cleared all tracked stocks.', 'info');
       loadStocks();
     } catch (error) {
       console.error('Failed to clear stocks:', error);
+      showStatus('Could not clear your tracked list.', 'error');
     }
   }
 
@@ -275,7 +615,7 @@
   }
 
   // Refresh current prices with simulated movement
-  async function refreshPrices() {
+  async function refreshPrices(isAutoRefresh) {
     try {
       const result = await storageGet(['trackedStocks']);
       const stocks = normaliseStocks(result.trackedStocks);
@@ -284,6 +624,9 @@
         return;
       }
 
+      if (!isAutoRefresh) {
+        showStatus('Refreshing saved comparisons...', 'info');
+      }
       setRefreshButtonLoading(true, false);
 
       Object.values(stocks).forEach((data) => {
@@ -295,11 +638,18 @@
       await storageSet({ trackedStocks: stocks });
       loadStocks();
 
+      showStatus(
+        isAutoRefresh
+          ? 'Auto refresh updated your saved comparison values.'
+          : 'Updated the saved comparison values.',
+        isAutoRefresh ? 'info' : 'success'
+      );
       window.setTimeout(() => {
         setRefreshButtonLoading(false, false);
       }, 600);
     } catch (error) {
       console.error('Error refreshing prices:', error);
+      showStatus('Refresh failed. Please try again.', 'error');
       setRefreshButtonLoading(false, true);
       window.setTimeout(() => {
         setRefreshButtonLoading(false, false);

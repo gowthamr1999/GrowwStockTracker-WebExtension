@@ -5,27 +5,56 @@
   const extensionVersion = chrome.runtime.getManifest().version;
   console.log(`[Groww Stock Tracker] Content script active - v${extensionVersion}`);
 
-  // Function to extract stock data from the current page
-  function extractStockData() {
-    // Try to find stock name and price on Groww's stock detail page
-    const stockNameElement = document.querySelector('[data-auto="stock-name"]') || 
-                            document.querySelector('h1.contentPrimary') ||
-                            document.querySelector('.stockName');
-    
-    const priceElement = document.querySelector('[data-auto="current-price"]') ||
-                        document.querySelector('.cur86v0') ||
-                        document.querySelector('.ltp');
-    
-    const changeElement = document.querySelector('[data-auto="stock-change"]') ||
-                         document.querySelector('.change');
-
-    if (!stockNameElement || !priceElement) {
-      return null;
+  function parsePriceFromText(text) {
+    if (!text) {
+      return NaN;
     }
 
-    const stockName = stockNameElement.textContent.trim();
-    const priceText = priceElement.textContent.trim();
-    const price = parseFloat(priceText.replace(/[₹,]/g, ''));
+    const match = String(text).match(/₹\s*([\d,]+(?:\.\d+)?)/);
+    if (!match) {
+      return NaN;
+    }
+
+    return parseFloat(match[1].replace(/,/g, ''));
+  }
+
+  // Function to extract stock data from the current page
+  function extractStockData() {
+    const stockNameElement = document.querySelector('[data-auto="stock-name"]') ||
+      document.querySelector('h1.contentPrimary') ||
+      document.querySelector('.stockName') ||
+      document.querySelector('h1');
+
+    const priceElement = document.querySelector('[data-auto="current-price"]') ||
+      document.querySelector('[data-testid="instrument-price-lastprice"]') ||
+      document.querySelector('[data-testid="ltp"]') ||
+      document.querySelector('.cur86v0') ||
+      document.querySelector('.ltp') ||
+      document.querySelector('[class*="price"]');
+
+    const changeElement = document.querySelector('[data-auto="stock-change"]') ||
+      document.querySelector('[data-testid="instrument-price-change"]') ||
+      document.querySelector('.change');
+
+    const stockName = stockNameElement
+      ? stockNameElement.textContent.trim()
+      : document.title.replace(/\s*[|\-].*$/, '').trim();
+
+    const pageText = document.body ? document.body.innerText : '';
+    const nearbyText = stockNameElement && stockNameElement.parentElement
+      ? stockNameElement.parentElement.innerText
+      : pageText;
+
+    const priceText = priceElement ? priceElement.textContent.trim() : '';
+    let price = parsePriceFromText(priceText);
+
+    if (!Number.isFinite(price)) {
+      price = parsePriceFromText(nearbyText);
+    }
+
+    if (!Number.isFinite(price)) {
+      price = parsePriceFromText(pageText);
+    }
 
     let changePercent = null;
     if (changeElement) {
@@ -36,9 +65,16 @@
       }
     }
 
-    // Extract stock symbol from URL
     const urlMatch = window.location.pathname.match(/\/stocks\/([^\/]+)/);
     const symbol = urlMatch ? urlMatch[1] : stockName;
+
+    if (!stockName || !Number.isFinite(price)) {
+      console.warn('[Groww Stock Tracker] Could not extract stock details from page.', {
+        stockName,
+        priceText
+      });
+      return null;
+    }
 
     return {
       symbol,
@@ -49,6 +85,46 @@
       timestamp: Date.now()
     };
   }
+
+  function saveTrackedStock(data, callback) {
+    chrome.storage.local.get(['trackedStocks'], (result) => {
+      const tracked = result.trackedStocks || {};
+      tracked[data.symbol] = data;
+
+      chrome.storage.local.set({ trackedStocks: tracked }, () => {
+        if (chrome.runtime.lastError) {
+          callback(chrome.runtime.lastError.message);
+          return;
+        }
+
+        console.log(`[Groww Stock Tracker] Tracked ${data.name} at ₹${data.price}`);
+        callback(null, data);
+      });
+    });
+  }
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || message.type !== 'TRACK_CURRENT_STOCK') {
+      return;
+    }
+
+    const data = extractStockData();
+    if (!data || !Number.isFinite(data.price)) {
+      sendResponse({ ok: false, error: 'Open a Groww stock page with a visible price first.' });
+      return;
+    }
+
+    saveTrackedStock(data, (error, savedData) => {
+      if (error) {
+        sendResponse({ ok: false, error });
+        return;
+      }
+
+      sendResponse({ ok: true, data: savedData });
+    });
+
+    return true;
+  });
 
   // Add a floating button to track the current stock
   function addTrackButton() {
@@ -108,31 +184,30 @@
         return;
       }
 
-      // Save to Chrome storage
-      chrome.storage.local.get(['trackedStocks'], (result) => {
-        const tracked = result.trackedStocks || {};
-        tracked[data.symbol] = data;
-        
-        chrome.storage.local.set({ trackedStocks: tracked }, () => {
-          // Show success feedback
+      saveTrackedStock(data, (error) => {
+        if (error) {
+          alert(`Could not save stock: ${error}`);
+          return;
+        }
+
+        // Show success feedback
+        button.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          <span>Tracked!</span>
+        `;
+        button.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
+
+        setTimeout(() => {
           button.innerHTML = `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="20 6 9 17 4 12"/>
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
             </svg>
-            <span>Tracked!</span>
+            <span>Track</span>
           `;
-          button.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
-          
-          setTimeout(() => {
-            button.innerHTML = `
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-              </svg>
-              <span>Track</span>
-            `;
-            button.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
-          }, 2000);
-        });
+          button.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+        }, 2000);
       });
     });
 
