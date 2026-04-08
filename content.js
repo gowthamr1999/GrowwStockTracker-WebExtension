@@ -18,6 +18,16 @@
     return parseFloat(match[1].replace(/,/g, ''));
   }
 
+  function parseMetricValue(text, label) {
+    if (!text) {
+      return NaN;
+    }
+
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = String(text).match(new RegExp(`${escapedLabel}\\s*₹?\\s*([\\d,]+(?:\\.\\d+)?)`, 'i'));
+    return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
+  }
+
   // Function to extract stock data from the current page
   function extractStockData() {
     const stockNameElement = document.querySelector('[data-auto="stock-name"]') ||
@@ -52,6 +62,7 @@
     const nearbyText = stockNameElement && stockNameElement.parentElement
       ? stockNameElement.parentElement.innerText
       : pageText;
+    const todayOpen = parseMetricValue(pageText, 'Open price');
 
     const priceText = priceElement ? priceElement.textContent.trim() : '';
     let price = parsePriceFromText(priceText);
@@ -96,6 +107,7 @@
       symbol,
       name: stockName,
       price,
+      todayOpen: Number.isFinite(todayOpen) ? todayOpen : null,
       changePercent,
       url: window.location.href,
       timestamp: Date.now()

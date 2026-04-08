@@ -148,6 +148,16 @@
           return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
         };
 
+        const parseMetricValue = (text, label) => {
+          if (!text) {
+            return NaN;
+          }
+
+          const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const match = String(text).match(new RegExp(`${escapedLabel}\\s*₹?\\s*([\\d,]+(?:\\.\\d+)?)`, 'i'));
+          return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
+        };
+
         const stockNameElement = document.querySelector('[data-auto="stock-name"]') ||
           document.querySelector('h1.contentPrimary') ||
           document.querySelector('.stockName') ||
@@ -171,6 +181,8 @@
           ? stockNameElement.textContent.trim()
           : document.title.replace(/\s*[|\-].*$/, '').trim();
 
+        const pageText = document.body ? document.body.innerText : '';
+        const todayOpen = parseMetricValue(pageText, 'Open price');
         const priceText = priceElement ? priceElement.textContent.trim() : '';
         let price = parsePriceFromText(priceText);
 
@@ -194,6 +206,7 @@
           symbol,
           name: stockName,
           price,
+          todayOpen: Number.isFinite(todayOpen) ? todayOpen : null,
           url: window.location.href,
           timestamp: Date.now()
         };
@@ -249,6 +262,55 @@
       console.error('Failed to read current tab:', error);
       currentTabStockKey = '';
     }
+  }
+
+  function getBestBuyToday(data) {
+    const targetPrice = toNumber(data.targetPrice, NaN);
+    const todayOpen = toNumber(data.todayOpen, NaN);
+    const savedPrice = toNumber(data.price, NaN);
+    const lastSeenPrice = toNumber(data.lastSeenPrice, savedPrice);
+    const currentPrice = toNumber(data.currentPrice, lastSeenPrice);
+
+    let bestBuyPrice = NaN;
+    if (Number.isFinite(targetPrice) && Number.isFinite(todayOpen)) {
+      bestBuyPrice = Math.min(targetPrice, todayOpen * 0.98);
+    } else if (Number.isFinite(targetPrice)) {
+      bestBuyPrice = targetPrice;
+    } else if (Number.isFinite(todayOpen)) {
+      bestBuyPrice = todayOpen * 0.98;
+    } else if (Number.isFinite(savedPrice)) {
+      bestBuyPrice = savedPrice * 0.98;
+    }
+
+    if (!Number.isFinite(bestBuyPrice)) {
+      return {
+        bestBuyPrice: NaN,
+        signal: 'Wait',
+        reason: 'Set a price or refresh the stock to estimate a daily buy zone.'
+      };
+    }
+
+    if (currentPrice <= bestBuyPrice) {
+      return {
+        bestBuyPrice,
+        signal: 'Buy Now',
+        reason: 'Live price is at or below today\'s best-buy level.'
+      };
+    }
+
+    if (currentPrice <= bestBuyPrice * 1.01) {
+      return {
+        bestBuyPrice,
+        signal: 'Near Buy',
+        reason: 'Live price is within 1% of today\'s best-buy level.'
+      };
+    }
+
+    return {
+      bestBuyPrice,
+      signal: 'Wait',
+      reason: 'Live price is still above the suggested buy zone.'
+    };
   }
 
   function getBuySignal(data) {
@@ -386,6 +448,16 @@
     return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
   }
 
+  function parseMetricValue(text, label) {
+    if (!text) {
+      return NaN;
+    }
+
+    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = String(text).match(new RegExp(`${escapedLabel}\\s*₹?\\s*([\\d,]+(?:\\.\\d+)?)`, 'i'));
+    return match ? parseFloat(match[1].replace(/,/g, '')) : NaN;
+  }
+
   function extractStockDataFromDocument(doc, url) {
     if (!doc) {
       return null;
@@ -414,6 +486,8 @@
       ? stockNameElement.textContent.trim()
       : doc.title.replace(/\s*[|\-].*$/, '').trim();
 
+    const pageText = doc.body ? doc.body.innerText : '';
+    const todayOpen = parseMetricValue(pageText, 'Open price');
     const priceText = priceElement ? priceElement.textContent.trim() : '';
     let price = parsePriceFromText(priceText);
 
@@ -437,6 +511,7 @@
       symbol,
       name: stockName,
       price,
+      todayOpen: Number.isFinite(todayOpen) ? todayOpen : null,
       url,
       timestamp: Date.now()
     };
@@ -495,6 +570,7 @@
           const lastSeenPrice = toNumber(data.lastSeenPrice, savedPrice);
           const currentPrice = toNumber(data.currentPrice, lastSeenPrice);
           const targetPrice = toNumber(data.targetPrice, NaN);
+          const todayOpen = toNumber(data.todayOpen, NaN);
 
           return [symbol, {
             ...data,
@@ -505,7 +581,8 @@
             price: savedPrice,
             lastSeenPrice,
             currentPrice,
-            targetPrice: Number.isFinite(targetPrice) ? targetPrice : null
+            targetPrice: Number.isFinite(targetPrice) ? targetPrice : null,
+            todayOpen: Number.isFinite(todayOpen) ? todayOpen : null
           }];
         })
     );
@@ -580,6 +657,7 @@
   // Create HTML for a stock card
   function createStockCard(symbol, data) {
     const savedPrice = toNumber(data.price, 0);
+    const todayOpen = toNumber(data.todayOpen, NaN);
     const lastSeenPrice = toNumber(data.lastSeenPrice, savedPrice);
     const currentPrice = toNumber(data.currentPrice, lastSeenPrice);
     const priceDiff = currentPrice - lastSeenPrice;
@@ -596,6 +674,7 @@
     }
 
     const targetPrice = toNumber(data.targetPrice, NaN);
+    const bestBuyToday = getBestBuyToday(data);
     const buySignal = getBuySignal(data);
     const isCurrentPageStock = symbol === currentTabStockKey || (data.url && data.url.includes(currentTabStockKey));
     const safeName = escapeHtml(data.name || symbol);
@@ -621,6 +700,10 @@
         </div>
 
         <div class="price-grid">
+          <div class="price-box">
+            <div class="price-label">Today Open</div>
+            <div class="price-value">${Number.isFinite(todayOpen) ? todayOpen.toFixed(2) : '--'}</div>
+          </div>
           <div class="price-box">
             <div class="price-label">Set Price</div>
             <div class="price-value">${Number.isFinite(targetPrice) ? targetPrice.toFixed(2) : '--'}</div>
@@ -655,9 +738,12 @@
             <button class="save-target-btn" data-symbol="${safeSymbol}" type="button">Set Price</button>
           </div>
           <div class="target-note">
-            ${Number.isFinite(targetPrice)
-              ? `Set Price: ₹${targetPrice.toFixed(2)} · Last Seen: ₹${lastSeenPrice.toFixed(2)} · Live: ₹${currentPrice.toFixed(2)}`
-              : 'Set a buy price and the popup will tell you when it matches the last seen or live price.'}
+            ${Number.isFinite(todayOpen)
+              ? `Today Open: ₹${todayOpen.toFixed(2)} · Best Buy Today: ₹${bestBuyToday.bestBuyPrice.toFixed(2)}`
+              : `Best Buy Today: ₹${bestBuyToday.bestBuyPrice.toFixed(2)}`}
+          </div>
+          <div class="best-buy-hint ${bestBuyToday.signal === 'Buy Now' ? 'buy-now' : bestBuyToday.signal === 'Near Buy' ? 'near-buy' : 'wait'}">
+            ${bestBuyToday.signal}: ${escapeHtml(bestBuyToday.reason)}
           </div>
           ${buySignal.isBuy ? `<div class="buy-signal">Buy Signal: ${escapeHtml(buySignal.reason)}</div>` : ''}
         </div>
@@ -900,6 +986,9 @@
           const previousLive = toNumber(data.currentPrice, toNumber(data.lastSeenPrice, toNumber(data.price, 0)));
           data.lastSeenPrice = previousLive;
           data.currentPrice = toNumber(freshData.price, previousLive);
+          data.todayOpen = Number.isFinite(toNumber(freshData.todayOpen, NaN))
+            ? toNumber(freshData.todayOpen, previousLive)
+            : data.todayOpen;
           data.name = freshData.name || data.name;
           data.url = freshData.url || data.url;
           updatedCount += 1;

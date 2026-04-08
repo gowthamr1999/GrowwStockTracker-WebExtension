@@ -400,7 +400,7 @@ button {
 /* Price Grid */
 .price-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -512,6 +512,29 @@ button {
   color: var(--green);
   font-size: 12px;
   font-weight: 700;
+}
+
+.best-buy-hint {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.best-buy-hint.buy-now {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--green);
+}
+
+.best-buy-hint.near-buy {
+  background: rgba(102, 126, 234, 0.12);
+  color: var(--accent-light);
+}
+
+.best-buy-hint.wait {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
 }
 
 .change-arrow {
