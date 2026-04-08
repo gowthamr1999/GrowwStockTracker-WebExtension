@@ -103,6 +103,24 @@
   }
 
   function saveTrackedStock(data, callback) {
+    if (chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'SAVE_TRACKED_STOCK', data }, (response) => {
+        if (chrome.runtime.lastError) {
+          callback(chrome.runtime.lastError.message);
+          return;
+        }
+
+        if (!response || !response.ok) {
+          callback(response && response.error ? response.error : 'Could not save stock.');
+          return;
+        }
+
+        console.log(`[Groww Stock Tracker] Tracked ${data.name} at ₹${data.price}`);
+        callback(null, response.data || data);
+      });
+      return;
+    }
+
     if (!chrome.storage || !chrome.storage.local) {
       callback('Storage API unavailable in this tab context.');
       return;
